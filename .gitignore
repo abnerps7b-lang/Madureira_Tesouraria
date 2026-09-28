@@ -1,0 +1,7 @@
+financeiro.sqlite3*
+acesso.json
+__pycache__/
+.verificacao/
+servidor*.log
+.env
+.env.*
