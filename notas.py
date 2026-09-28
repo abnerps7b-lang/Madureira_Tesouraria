@@ -16,7 +16,7 @@ import warnings
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 OCR_SLOTS = threading.BoundedSemaphore(2)
-MAX_BYTES = 8 * 1024 * 1024
+MAX_BYTES = (3 if os.environ.get('VERCEL') else 8) * 1024 * 1024
 MAX_PIXELS = 24000000
 
 
@@ -87,11 +87,11 @@ def extract_receipt(text):
 
 def validate_image(encoded):
     if not isinstance(encoded, str) or len(encoded) > (MAX_BYTES * 4 // 3 + 8):
-        raise ValueError('Envie uma foto de até 8 MB.')
+        raise ValueError(f'Envie uma foto de até {MAX_BYTES // (1024 * 1024)} MB.')
     try:
         raw = base64.b64decode(encoded, validate=True)
         if not raw or len(raw) > MAX_BYTES:
-            raise ValueError('Envie uma foto de até 8 MB.')
+            raise ValueError(f'Envie uma foto de até {MAX_BYTES // (1024 * 1024)} MB.')
         with warnings.catch_warnings():
             warnings.simplefilter('error', Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as image:
@@ -173,6 +173,10 @@ def read_receipt(raw):
             message = 'A análise por IA não foi concluída: ' + str(error)
     else:
         message = 'IA não ativada: configure sua chave no computador do sistema. Foi usada apenas a leitura local.'
+    if os.environ.get('VERCEL'):
+        return {'valor': None, 'descricao': 'Despesa conforme nota fiscal', 'conferido': False,
+                'fonte': 'manual', 'versao': 3, 'texto': '',
+                'mensagem': 'A nota foi anexada. Preencha os dados manualmente. Para leitura automática, configure OPENAI_API_KEY na Vercel ou confira o saldo e acesso da API.'}
     local = read_receipt_local(raw)
     local.update(fonte='ocr', versao=3, mensagem=message + ' ' + local['mensagem'])
     return local

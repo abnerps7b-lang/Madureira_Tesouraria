@@ -10,7 +10,7 @@ def shift_month(mes, offset):
 
 
 def first_month(con):
-    row = con.execute("SELECT MIN(mes) FROM (SELECT substr(data,1,7) mes FROM entradas UNION ALL SELECT substr(data,1,7) FROM despesas UNION ALL SELECT mes FROM fechamentos)").fetchone()
+    row = con.execute("SELECT MIN(mes) FROM (SELECT substr(data,1,7) mes FROM entradas UNION ALL SELECT substr(data,1,7) FROM despesas UNION ALL SELECT mes FROM fechamentos) AS meses").fetchone()
     return row[0] or date.today().strftime('%Y-%m')
 
 

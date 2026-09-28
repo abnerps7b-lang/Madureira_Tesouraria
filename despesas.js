@@ -1,4 +1,17 @@
 const expensesView=document.createElement('section');expensesView.id='expensesView';expensesView.hidden=true;
+async function encodeReceipt(file){
+ if(file.size>8*1024*1024)throw Error('Selecione uma foto de até 8 MB.');
+ let source=file;
+ if(window.ONLINE_HOSTING&&file.size>3*1024*1024){
+  const bitmap=await createImageBitmap(file),canvas=document.createElement('canvas');
+  const scale=Math.min(1,2800/Math.max(bitmap.width,bitmap.height));
+  canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);
+  const context=canvas.getContext('2d');context.fillStyle='white';context.fillRect(0,0,canvas.width,canvas.height);context.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();
+  for(const quality of [.9,.8,.65]){source=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',quality));if(source&&source.size<=3*1024*1024)break;}
+  if(!source||source.size>3*1024*1024)throw Error('A foto ainda está grande. Envie uma imagem menor para a hospedagem.');
+ }
+ return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(Error('Não foi possível abrir a foto.'));reader.readAsDataURL(source);});
+}
 const expenseCategories=['Alimentação','Vestuário','Produtos de Limpeza','Energia','Água','Transporte','Saúde','Lazer','Outros'];
 function categorySelect(value='Outros'){const select=document.createElement('select');for(const category of expenseCategories){const option=new Option(category,category,category===value,category===value);select.add(option);}return select;}
 expensesView.innerHTML=`<section class="cards"><div class="card total"><div class="label">Despesas do mês</div><div class="amount" id="expenseTotal">—</div><div class="sub" id="expenseCount"></div></div></section>
@@ -34,7 +47,7 @@ $('batchFiles').onchange=async()=>{
   for(const control of [dateInput,description,category,value]){const td=document.createElement('td');td.append(control);tr.append(td);}const actions=document.createElement('td');actions.append(status,save,remove);tr.append(actions);$('batchRows').append(tr);
   try{
    if(file.size>8*1024*1024)throw Error('Foto acima de 8 MB.');
-   const arquivo=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(Error('Não foi possível abrir a foto.'));reader.readAsDataURL(file);});
+   const arquivo=await encodeReceipt(file);
    const note=await api('/api/notas',{arquivo});description.value=note.descricao||'';category.value=note.categoria||'Outros';value.value=note.valor===null?'':(note.valor/100).toFixed(2).replace('.',',');status.textContent=(note.mensagem||'Confira os dados.')+' Informe a data da nota.';
    const link=document.createElement('a');link.href='/api/nota?id='+encodeURIComponent(note.id);link.target='_blank';link.rel='noopener';link.textContent='Ver nota';actions.prepend(link);save.disabled=false;
    save.onclick=async()=>{
@@ -49,7 +62,7 @@ $('batchFiles').onchange=async()=>{
 };
 document.querySelector('#expenseDialog > p').insertAdjacentHTML('afterend','<p id="aiStatus" class="chart-subtitle" role="status" style="margin-top:10px"></p>');
 document.querySelector('#expenseDialog > p').textContent='Anexe a nota e confira o total e a descrição sugeridos. Você pode complementar os campos antes de salvar.';
-document.querySelector('#expenseForm .formgrid').insertAdjacentHTML('afterbegin', `<div class="wide"><label>Foto da nota (obrigatória)<input id="receiptFile" type="file" accept="image/jpeg,image/png,image/webp" required></label><p class="chart-subtitle">JPG, PNG ou WebP, até 8 MB. Fotografe a nota inteira, com boa iluminação.</p><p id="receiptStatus" role="status" style="margin-top:10px"></p><img id="receiptPreview" alt="Nota anexada" hidden style="max-width:100%;max-height:220px;object-fit:contain;margin-top:12px"><details id="receiptDetails" hidden><summary>Texto identificado na nota</summary><pre id="receiptText" style="white-space:pre-wrap;max-height:180px;overflow:auto;font-size:12px"></pre></details></div>`);
+document.querySelector('#expenseForm .formgrid').insertAdjacentHTML('afterbegin', `<div class="wide"><label>Foto da nota (obrigatória)<input id="receiptFile" type="file" accept="image/jpeg,image/png,image/webp" required></label><p class="chart-subtitle">JPG, PNG ou WebP, até 8 MB. Fotografe a nota inteira, com boa iluminação. Na hospedagem, fotos grandes são compactadas antes do envio.</p><p id="receiptStatus" role="status" style="margin-top:10px"></p><img id="receiptPreview" alt="Nota anexada" hidden style="max-width:100%;max-height:220px;object-fit:contain;margin-top:12px"><details id="receiptDetails" hidden><summary>Texto identificado na nota</summary><pre id="receiptText" style="white-space:pre-wrap;max-height:180px;overflow:auto;font-size:12px"></pre></details></div>`);
 let receiptId=null,receiptVersion=0,receiptLoading=false;
 $('receiptStatus').insertAdjacentHTML('afterend','<button type="button" id="retryReceipt" class="secondary" hidden>Ler nota novamente</button>');
 $('retryReceipt').onclick=()=>{if(!receiptLoading)$('receiptFile').onchange(true);};
@@ -62,7 +75,7 @@ $('receiptFile').onchange=async(force=false)=>{
   receiptLoading=true;$('receiptStatus').textContent='Analisando a foto e conferindo os valores. Aguarde; a análise pode levar alguns minutos…';
   const oldValue=$('expenseValue').value,oldDescription=$('expenseDescription').value;
   try{
-    const encoded=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(Error('Não foi possível abrir a foto.'));reader.readAsDataURL(file);});
+    const encoded=await encodeReceipt(file);
     if(version!==receiptVersion)return;
     const note=await api('/api/notas',{arquivo:encoded,reanalisar:force===true});if(version!==receiptVersion)return;
     receiptId=note.id;$('expenseCategory').value=note.categoria||'Outros';$('receiptPreview').src='/api/nota?id='+encodeURIComponent(receiptId);$('receiptPreview').hidden=false;

@@ -1,0 +1,12 @@
+.git
+.venv
+.vercel
+.verificacao
+__pycache__
+tessdata
+*.sqlite3*
+acesso.json
+servidor*.log
+.env*
+test_*.py
+*.pdf

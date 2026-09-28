@@ -42,7 +42,7 @@ def api_key():
 def status():
     return {'configurada': bool(api_key()), 'modelo': MODEL,
             'mensagem': 'IA configurada: duas leituras da foto e conferência dos valores.' if api_key() else
-            'IA ainda não ativada. No computador do sistema, abra Configurar IA.cmd e informe sua chave. Por enquanto, a leitura é pelo OCR local.'}
+            ('Configure OPENAI_API_KEY na Vercel para leitura automática. Sem a chave, anexe a nota e preencha os campos manualmente.' if os.environ.get('VERCEL') else 'IA ainda não ativada. No computador do sistema, abra Configurar IA.cmd e informe sua chave. Por enquanto, a leitura é pelo OCR local.')}
 
 
 def extract(raw, mime, audit=False):

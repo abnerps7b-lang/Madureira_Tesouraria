@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "Testes.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{.verificacao/**,tessdata/**,test_*.py,*.sqlite3*,acesso.json,servidor*.log,.env*,.git/**}"
+    }
+  }
+}

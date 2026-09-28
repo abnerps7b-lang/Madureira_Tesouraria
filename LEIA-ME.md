@@ -53,7 +53,11 @@ Para preparar outro computador: execute `python -m pip install -r requirements.t
 
 Salve o logotipo original como `logo.png` nesta mesma pasta. O sistema exibirá a imagem na tela de acesso, na identificação da igreja e no relatório mensal, preservando suas proporções. Basta atualizar a página depois de salvar o arquivo.
 
-## Armazenamento
+## Publicação na Vercel
+
+Consulte [VERCEL.md](VERCEL.md) para conectar PostgreSQL, configurar as variáveis, publicar e importar os registros locais. Na Vercel, dados e sessões ficam no PostgreSQL; não há SQLite temporário. O banco remoto começa vazio até a importação. A leitura automática das notas usa a API; sem chave, os dados são preenchidos manualmente.
+
+## Armazenamento local
 
 Na aba **Lançamentos de despesas**, a seção **Adicionar notas em lote** permite selecionar várias fotos. Aguarde a leitura, informe a data, confira os valores e clique em **Salvar nota** em cada linha. Falhas em uma foto não interrompem as demais; a linha informa como tentar novamente. Linhas ainda não salvas devem ser conferidas antes de atualizar ou fechar a página.
 

@@ -13,6 +13,7 @@ import secrets
 import socket
 import sqlite3
 import time
+from functools import wraps
 from datetime import date
 from http.cookies import SimpleCookie, CookieError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,8 @@ from financeiro import closing_for, dashboard, first_month
 from notas import validate_image, read_receipt
 from notas_ia import status as ai_status, api_key
 from categorias import CATEGORIES, categorize
+from banco_online import database_url, connect_online, StorageUnavailable
+import sessoes_online
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'financeiro.sqlite3'
@@ -30,8 +33,31 @@ SESSIONS = {}
 ATTEMPTS = {}
 
 
+def online():
+    return bool(os.environ.get('VERCEL') or database_url())
+
+
+def handle_errors(method):
+    @wraps(method)
+    def wrapped(self):
+        try:
+            return method(self)
+        except StorageUnavailable as error:
+            return self.reply(503, {'error': str(error)})
+        except sqlite3.IntegrityError:
+            return self.reply(409, {'error': 'Registro em conflito. Atualize a lista e confira se já foi cadastrado.'})
+        except Exception as error:
+            self.log_error('Falha em %s: %s', method.__name__, type(error).__name__)
+            return self.reply(500, {'error': 'Falha interna do servidor. Consulte os logs da hospedagem.'})
+    return wrapped
+
+
 @contextmanager
 def connect():
+    if online():
+        with connect_online() as con:
+            yield con
+        return
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA foreign_keys = ON')
@@ -43,6 +69,10 @@ def connect():
 
 
 def initialize():
+    if online():
+        with connect_online():
+            pass
+        return
     with connect() as con:
         con.execute('''CREATE TABLE IF NOT EXISTS entradas (
             id INTEGER PRIMARY KEY, tipo TEXT NOT NULL CHECK(tipo IN ('dizimo','oferta')),
@@ -93,6 +123,24 @@ def digest(password, salt):
     return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 600000).hex()
 
 
+def verify_password(password):
+    configured = os.environ.get('ADMIN_PASSWORD')
+    if configured is not None:
+        if len(configured) < 12:
+            raise RuntimeError('Configure ADMIN_PASSWORD com pelo menos 12 caracteres nas variáveis de ambiente e faça um novo deploy.')
+        return hmac.compare_digest(hashlib.sha256(password.encode()).digest(),
+                                   hashlib.sha256(configured.encode()).digest())
+    if online():
+        raise RuntimeError('Login não configurado: adicione ADMIN_PASSWORD nas variáveis de ambiente da Vercel e faça um novo deploy.')
+    try:
+        config = json.loads(CONFIG.read_text(encoding='utf-8'))
+        if not isinstance(config, dict) or not isinstance(config.get('salt'), str) or not isinstance(config.get('hash'), str):
+            raise ValueError('Configuração inválida')
+        return hmac.compare_digest(digest(password, config['salt']), config['hash'])
+    except (OSError, ValueError, TypeError):
+        raise RuntimeError('Configuração de acesso indisponível. Configure ADMIN_PASSWORD ou inicie o aplicativo local para configurar a senha.') from None
+
+
 def normalize_code(value):
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,30}', value.strip()):
         raise ValueError('Informe um código de até 30 letras, números, hífens ou sublinhados.')
@@ -123,12 +171,16 @@ class Handler(BaseHTTPRequestHandler):
             token = cookie['session'].value
         except (KeyError, CookieError):
             return False
+        if online():
+            return sessoes_online.authenticated(token)
         return SESSIONS.get(token, 0) > time.time()
 
+    @handle_errors
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == '/':
             page = (ROOT / 'index.html').read_text(encoding='utf-8')
+            page = page.replace('<head>', '<head><script>window.ONLINE_HOSTING=' + ('true' if os.environ.get('VERCEL') else 'false') + ';</script>', 1)
             if (ROOT / 'logo.png').is_file():
                 page = page.replace('<span class="symbol">✦</span>',
                     '<img class="church-logo" src="/logo.png" alt="AD Piracicaba — Ministério Madureira">')
@@ -227,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(200, '\ufeff' + output.getvalue(), 'text/csv; charset=utf-8',
                           {'Content-Disposition': 'attachment; filename="relatorio-entradas.csv"'})
 
+    @handle_errors
     def do_POST(self):
         if self.headers.get('X-Requested-With') != 'Igreja':
             return self.reply(403, {'error': 'Requisição não autorizada.'})
@@ -234,25 +287,38 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/notas' and not self.authenticated():
                 return self.reply(401, {'error': 'Entre com sua senha para anexar a nota.'})
             size = int(self.headers.get('Content-Length', 0))
-            if not 0 < size <= (12 * 1024 * 1024 if self.path == '/api/notas' else 10000):
+            note_limit = 4_400_000 if os.environ.get('VERCEL') else 12 * 1024 * 1024
+            if not 0 < size <= (note_limit if self.path == '/api/notas' else 10000):
                 raise ValueError('Requisição inválida.')
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError('Requisição inválida.')
             if self.path == '/api/login':
                 ip = self.client_address[0]
+                if os.environ.get('VERCEL'):
+                    ip = self.headers.get('x-vercel-forwarded-for', ip).split(',')[0].strip()
+                if online() and not sessoes_online.allow_attempt(ip):
+                    return self.reply(429, {'error': 'Muitas tentativas. Aguarde 5 minutos.'})
                 recent = [t for t in ATTEMPTS.get(ip, []) if t > time.time() - 300]
                 ATTEMPTS[ip] = recent
                 if len(recent) >= 10:
                     return self.reply(429, {'error': 'Muitas tentativas. Aguarde 5 minutos.'})
-                config = json.loads(CONFIG.read_text())
-                if not hmac.compare_digest(digest(str(data.get('senha', '')), config['salt']), config['hash']):
+                try:
+                    valid_password = verify_password(str(data.get('senha', '')))
+                except RuntimeError as error:
+                    return self.reply(503, {'error': str(error)})
+                if not valid_password:
                     recent.append(time.time())
                     return self.reply(401, {'error': 'Senha incorreta.'})
                 ATTEMPTS.pop(ip, None)
-                token = secrets.token_urlsafe(32)
-                SESSIONS[token] = time.time() + 28800
-                return self.reply(200, {'ok': True}, headers={'Set-Cookie': f'session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800'})
+                if online():
+                    sessoes_online.reset_attempts(ip)
+                    token = sessoes_online.create_session()
+                else:
+                    token = secrets.token_urlsafe(32)
+                    SESSIONS[token] = time.time() + 28800
+                secure = '; Secure' if os.environ.get('VERCEL') else ''
+                return self.reply(200, {'ok': True}, headers={'Set-Cookie': f'session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800{secure}'})
             if not self.authenticated():
                 return self.reply(401, {'error': 'Sua sessão expirou. Entre novamente.'})
             if self.path in ('/api/entradas/excluir', '/api/despesas/excluir'):
@@ -268,7 +334,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {'ok': True})
             if self.path == '/api/logout':
                 cookie = SimpleCookie(self.headers.get('Cookie', ''))
-                SESSIONS.pop(cookie['session'].value, None)
+                if online():
+                    sessoes_online.logout(cookie['session'].value)
+                else:
+                    SESSIONS.pop(cookie['session'].value, None)
                 return self.reply(200, {'ok': True}, headers={'Set-Cookie': 'session=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict'})
             if self.path == '/api/ofertas':
                 nome = data.get('nome')
@@ -277,8 +346,8 @@ class Handler(BaseHTTPRequestHandler):
                 nome = ' '.join(nome.split())
                 try:
                     with connect() as con:
-                        cursor = con.execute('INSERT INTO ofertas(nome,chave) VALUES(?,?)', (nome, nome.casefold()))
-                        offer_id = cursor.lastrowid
+                        cursor = con.execute('INSERT INTO ofertas(nome,chave) VALUES(?,?) RETURNING id', (nome, nome.casefold()))
+                        offer_id = cursor.fetchone()['id']
                 except sqlite3.IntegrityError:
                     return self.reply(409, {'error': 'Esta oferta já está cadastrada.'})
                 return self.reply(201, {'id': offer_id, 'nome': nome})

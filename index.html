@@ -33,7 +33,7 @@
 const $=id=>document.getElementById(id), money=v=>(v/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),today=()=>{let d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`},dateText=s=>s.split('-').reverse().join('/');
 let activeQuery='',requestNumber=0;
 $('inicio').value=today().slice(0,8)+'01';$('fim').value=today();
-async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'Igreja'},body:JSON.stringify(body)}:{});const data=await r.json();if(!r.ok){if(r.status===401&&path!='/api/login'){show(false);document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close())}throw Error(data.error||'Não foi possível concluir a operação.')}return data}
+async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'Igreja'},body:JSON.stringify(body)}:{});let data;try{data=await r.json()}catch{throw Error('O servidor retornou uma resposta inválida (HTTP '+r.status+'). Consulte os logs da Vercel para verificar a falha.')}if(!data||typeof data!=='object')throw Error('Resposta inesperada do servidor.');if(!r.ok){if(r.status===401&&path!='/api/login'){show(false);document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close())}throw Error(data.error||'Não foi possível concluir a operação.')}return data}
 function show(logged){$('login').hidden=logged;$('app').hidden=!logged}
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;setTimeout(()=>$('toast').hidden=true,4500)}
 function deleteCell(kind,id,label,reload){
